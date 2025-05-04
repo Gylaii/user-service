@@ -71,10 +71,10 @@ fun generateToken(userId: UUID, email: String): String {
 
 fun initDatabase() {
     val config = HikariConfig().apply {
-        jdbcUrl = "jdbc:postgresql://localhost:5432/postgres"
+        jdbcUrl = System.getenv("DB_URL") ?: "jdbc:postgresql://localhost:7777/postgres"
         driverClassName = "org.postgresql.Driver"
-        username = "postgres"
-        password = "postgres"
+        username = System.getenv("DB_USER") ?: "postgres"
+        password = System.getenv("DB_PASSWORD") ?: "postgres"
         maximumPoolSize = 10
     }
     val dataSource = HikariDataSource(config)
@@ -90,7 +90,7 @@ fun initDatabase() {
 fun main() {
     initDatabase()
 
-    val redisClient = RedisClient.create("redis://localhost:6379?timeout=0")
+    val redisClient = RedisClient.create("redis://${System.getenv("KEYDB_HOST") ?: "localhost"}:${System.getenv("KEYDB_PORT") ?: "6379"}")
     val connection = redisClient.connect()
     val commands: RedisCommands<String, String> = connection.sync()
 
