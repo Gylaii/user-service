@@ -48,3 +48,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+## Ignore kotlin language server
+kls_database.db
