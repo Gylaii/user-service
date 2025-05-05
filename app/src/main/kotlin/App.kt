@@ -32,6 +32,7 @@ import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.http.ContentType
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
+import java.time.LocalDate
 
 @Serializable
 data class RegisterRequest(val email: String, val password: String, val name: String)
@@ -48,14 +49,102 @@ data class RequestMessage(val type: String, val correlationId: String, val paylo
 @Serializable
 data class ResponseMessage(val correlationId: String, val payload: String)
 
+@Serializable
+data class UserProfile(
+    val id: String,
+    val email: String,
+    val name: String,
+    val height: Int? = null,
+    val weight: Int? = null,
+    val goal: String? = null,
+    val activityLevel: String? = null,
+    val createdAt: String
+)
+
+@Serializable
+data class UpdateInfoRequest(
+    val name: String
+)
+
+@Serializable
+data class UpdateMetricsRequest(
+    val height: Int? = null,
+    val weight: Int? = null,
+    val goal: String? = null,
+    val activityLevel: String? = null
+)
+
+
 object Users : Table("users") {
     val id = uuid("id").clientDefault { UUID.randomUUID() }
     val email = varchar("email", 255).uniqueIndex()
     val passwordHash = varchar("password_hash", 255)
     val name = varchar("name", 255)
+    val height = integer("height").nullable()
+    val weight = integer("weight").nullable()
+    val goal = varchar("goal", 50).nullable()
+    val activityLevel = varchar("activity_level", 50).nullable()
     val createdAt = datetime("created_at").clientDefault { LocalDateTime.now() }
     override val primaryKey = PrimaryKey(id)
 }
+
+@Serializable
+data class UserInfo(
+    val id: String,
+    val email: String,
+    val name: String,
+    val createdAt: String
+)
+
+@Serializable
+data class UserMetrics(
+    val height: Int? = null,
+    val weight: Int? = null,
+    val goal: String? = null,
+    val activityLevel: String? = null
+)
+
+@Serializable
+data class HistoryQueryParams(
+    val from: String? = null,
+    val to: String? = null,
+    val field: String? = null
+)
+
+@Serializable
+data class HistoryRecord(
+    val field: String,
+    val oldValue: Int?,
+    val newValue: Int?,
+    val changedAt: String
+)
+
+fun ResultRow.toProfile() = UserProfile(
+    id            = this[Users.id].toString(),
+    email         = this[Users.email],
+    name          = this[Users.name],
+    height        = this[Users.height],
+    weight        = this[Users.weight],
+    goal          = this[Users.goal],
+    activityLevel = this[Users.activityLevel],
+    createdAt     = this[Users.createdAt].toString()
+)
+
+object UserMetricsHistory : Table("user_metrics_history") {
+    val id = uuid("id").clientDefault { UUID.randomUUID() }
+    val userId = uuid("user_id")
+    val field = varchar("field", 10)
+    val oldValue = integer("old_value").nullable()
+    val newValue = integer("new_value").nullable()
+    val changedAt = datetime("changed_at").clientDefault { LocalDateTime.now() }
+}
+
+inline fun <reified T> sendResponse(cid: String, body: T?, cmd: RedisCommands<String, String>) {
+    val payload = if (body != null) Json.encodeToString(body) else "null"
+    val message = Json.encodeToString(ResponseMessage(cid, payload))
+    cmd.publish("api-gateway:response-channel", message)
+}
+
 
 private val logger = LoggerFactory.getLogger("UserService")
 
@@ -81,8 +170,9 @@ fun initDatabase() {
 
     Database.connect(dataSource)
     transaction {
-        logger.info("Создаём (при необходимости) таблицу `users` через createMissingTablesAndColumns...")
+        logger.info("Создаём (при необходимости) таблицы...")
         createMissingTablesAndColumns(Users)
+        createMissingTablesAndColumns(UserMetricsHistory)
     }
     logger.info("База данных инициализирована успешно.")
 }
@@ -136,6 +226,7 @@ fun main() {
                         logger.debug("Опубликован ответ в канал api-gateway:response-channel")
 
                     }
+
                     "login" -> {
                         val loginRequest = Json.decodeFromString<LoginRequest>(requestMsg.payload)
                         logger.debug("Обрабатываем вход пользователя: ${loginRequest.email}")
@@ -158,11 +249,137 @@ fun main() {
                         commands.publish("api-gateway:response-channel", responseJson)
                         logger.debug("Опубликован ответ на логин в канал api-gateway:response-channel")
                     }
-                    else -> {
-                        logger.warn("Неизвестный тип запроса: ${requestMsg.type}")
+
+                    "get-profile-info" -> {
+                        val userId = UUID.fromString(requestMsg.payload)
+                        val info = transaction {
+                            Users.select { Users.id eq userId }
+                                .singleOrNull()
+                                ?.let { row ->
+                                    UserInfo(
+                                        id = row[Users.id].toString(),
+                                        email = row[Users.email],
+                                        name = row[Users.name],
+                                        createdAt = row[Users.createdAt].toString()
+                                    )
+                                }
+                        }
+                        sendResponse(requestMsg.correlationId, info, commands)
+                    }
+
+                    "get-profile-metrics" -> {
+                        val userId = UUID.fromString(requestMsg.payload)
+                        val metrics = transaction {
+                            Users.select { Users.id eq userId }
+                                .singleOrNull()
+                                ?.let { row ->
+                                    UserMetrics(
+                                        height = row[Users.height],
+                                        weight = row[Users.weight],
+                                        goal = row[Users.goal],
+                                        activityLevel = row[Users.activityLevel]
+                                    )
+                                }
+                        }
+                        sendResponse(requestMsg.correlationId, metrics, commands)
+                    }
+
+                    "update-profile-info" -> {
+                        val (userIdRaw, updateJson) = requestMsg.payload.split(";", limit = 2)
+                        val upd = Json.decodeFromString<UpdateInfoRequest>(updateJson)
+                        val profile = transaction {
+                            Users.update({ Users.id eq UUID.fromString(userIdRaw) }) { row ->
+                                row[name] = upd.name
+                            }
+                            Users.select { Users.id eq UUID.fromString(userIdRaw) }
+                                .singleOrNull()?.toProfile()
+                        }
+                        sendResponse(requestMsg.correlationId, profile, commands)
+                    }
+
+                    "update-profile-metrics" -> {
+                        val (userIdRaw, updateJson) = requestMsg.payload.split(";", limit = 2)
+                        val upd    = Json.decodeFromString<UpdateMetricsRequest>(updateJson)
+                        val userId = UUID.fromString(userIdRaw)
+
+                        val profile = transaction {
+                            val existing = Users.select { Users.id eq userId }.singleOrNull()
+
+                            if (existing != null) {
+
+                                val prevHeight = existing[Users.height]
+                                if (upd.height != null && (prevHeight == null || upd.height != prevHeight)) {
+                                    UserMetricsHistory.insert { stmt ->
+                                        stmt[UserMetricsHistory.userId ]  = userId
+                                        stmt[field]  = "height"
+                                        stmt[oldValue] = prevHeight ?: upd.height
+                                        stmt[newValue] = upd.height
+                                    }
+                                }
+
+                                val prevWeight = existing[Users.weight]
+                                if (upd.weight != null && (prevWeight == null || upd.weight != prevWeight)) {
+                                    UserMetricsHistory.insert { stmt ->
+                                        stmt[UserMetricsHistory.userId]  = userId
+                                        stmt[field]  = "weight"
+                                        stmt[oldValue] = prevWeight ?: upd.weight
+                                        stmt[newValue] = upd.weight
+                                    }
+                                }
+
+                                Users.update({ Users.id eq userId }) { row ->
+                                    upd.height        ?.let { row[height]        = it }
+                                    upd.weight        ?.let { row[weight]        = it }
+                                    upd.goal          ?.let { row[goal]          = it }
+                                    upd.activityLevel ?.let { row[activityLevel] = it }
+                                }
+
+                                Users.select { Users.id eq userId }.singleOrNull()?.toProfile()
+                            } else null
+                        }
+
+                        sendResponse<UserProfile>(requestMsg.correlationId, profile, commands)
+                    }
+
+                    "get-metrics-history" -> {
+                        val (userIdRaw, queryJson) = requestMsg.payload.split(";", limit = 2)
+                        val userId = UUID.fromString(userIdRaw)
+
+                        val params = Json.decodeFromString<HistoryQueryParams>(queryJson)
+
+                        val result = transaction {
+                            val baseQuery = UserMetricsHistory.select { UserMetricsHistory.userId eq userId }
+
+                            val filtered = baseQuery.let { q0 ->
+                                var q = q0
+                                params.field?.let {
+                                    q = q.andWhere { UserMetricsHistory.field eq it }
+                                }
+                                params.from?.let {
+                                    val fromDt = LocalDate.parse(it).atStartOfDay()
+                                    q = q.andWhere { UserMetricsHistory.changedAt greaterEq fromDt }
+                                }
+                                params.to?.let {
+                                    val toDt = LocalDate.parse(it).atTime(23, 59, 59)
+                                    q = q.andWhere { UserMetricsHistory.changedAt lessEq toDt }
+                                }
+                                q
+                            }
+
+                            filtered.orderBy(UserMetricsHistory.changedAt to SortOrder.DESC).map {
+                                HistoryRecord(
+                                    field = it[UserMetricsHistory.field],
+                                    oldValue = it[UserMetricsHistory.oldValue],
+                                    newValue = it[UserMetricsHistory.newValue],
+                                    changedAt = it[UserMetricsHistory.changedAt].toString()
+                                )
+                            }
+                        }
+
+                        sendResponse(requestMsg.correlationId, result, commands)
                     }
                 }
-            } else {
+                } else {
                 logger.debug("В очереди user-service:request-queue нет сообщений. Продолжаем ожидание.")
             }
         }
