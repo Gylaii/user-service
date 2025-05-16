@@ -2,15 +2,13 @@ plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
     id("io.ktor.plugin") version "2.3.0"
+    id("com.ncorti.ktfmt.gradle") version "0.22.0"
     application
     idea
     java
 }
 
-
-application {
-    mainClass.set("AppKt")
-}
+application { mainClass.set("AppKt") }
 
 repositories {
     mavenCentral()
@@ -48,4 +46,11 @@ dependencies {
 
     testImplementation("io.ktor:ktor-server-tests:2.3.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.8.22")
+}
+
+ktfmt {
+    kotlinLangStyle()
+    maxWidth.set(80)
+    removeUnusedImports.set(false)
+    manageTrailingCommas.set(true)
 }
