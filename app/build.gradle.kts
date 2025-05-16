@@ -3,6 +3,8 @@ plugins {
     kotlin("plugin.serialization")
     id("io.ktor.plugin") version "2.3.0"
     application
+    idea
+    java
 }
 
 
@@ -12,6 +14,7 @@ application {
 
 repositories {
     mavenCentral()
+    maven { url = uri("https://jitpack.io") }
 }
 
 dependencies {
@@ -40,6 +43,8 @@ dependencies {
     implementation("org.mindrot:jbcrypt:0.4")
 
     implementation("ch.qos.logback:logback-classic:1.4.14")
+
+    implementation("com.github.Gylaii:keydb-client-lib:v0.1.1")
 
     testImplementation("io.ktor:ktor-server-tests:2.3.0")
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.8.22")
