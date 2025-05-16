@@ -180,8 +180,20 @@ fun initDatabase() {
 }
 
 fun main() {
+    // Setup logging levels
+    val hikariLogger = LoggerFactory.getLogger("com.zaxxer.hikari") as ch.qos.logback.classic.Logger
+    hikariLogger.level = ch.qos.logback.classic.Level.INFO
+    
+    val lettuceLogger = LoggerFactory.getLogger("io.lettuce") as ch.qos.logback.classic.Logger
+    lettuceLogger.level = ch.qos.logback.classic.Level.INFO
+    
+    val nettyLogger = LoggerFactory.getLogger("io.netty") as ch.qos.logback.classic.Logger
+    nettyLogger.level = ch.qos.logback.classic.Level.INFO
+
+    // Init Hikari pool of PostgreSQL
     initDatabase()
 
+    // Init Gulaii's KeyDB Client
     val keydb = KeyDBClient()
 
     GlobalScope.launch {
